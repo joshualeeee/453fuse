@@ -27,14 +27,9 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/time.h>
-//#include "aes_crypt.h" // Include the AES crypt header for encryption/decryption
-
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
 #endif
-
-#include "aes-crypt.h"
-
 
 static void fullpath(char fpath[PATH_MAX], const char *path);
 
@@ -305,12 +300,9 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     return res;
 }
 
-// If write is called then the file needs to be decrypeted before writing
-// Then the entire file is encrypted again after writing
 static int xmp_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *fi)
 {
-
     int fd;
     int res;
     char fpath[PATH_MAX];
@@ -442,16 +434,7 @@ static struct fuse_operations xmp_oper = {
 #endif
 };
 
-// Global variables
 static char *real_root;
-unsigned char key[32]; // Global buffer for the derived key
-
-
-// // password: user input (null-terminated string)
-// // key: output buffer (must be at least 32 bytes)
-// void derive_key(const char *password, unsigned char key[32]) {
-//     SHA256((const unsigned char *)password, strlen(password), key);
-// }
 
 static void fullpath(char fpath[PATH_MAX], const char *path)
 {
@@ -479,20 +462,6 @@ int main(int argc, char *argv[])
 
     // Remove mirror_dir from argv, keep FUSE args and mountpoint intact
     argc--; // drop the mirror_dir argument
-
-    // Get password input from the user and then derive the key
-    static char password[256]; // Buffer for the password input
-    printf("Enter password for decryption: ");
-    fgets(password, sizeof(password), stdin);
-    password[strcspn(password, "\n")] = 0; // Remove newline character
-    // derive_key(password, key); // Derive the key from the password, store it in the global key buffer
-
-    printf("key derived from password: ");
-    int i = 0;
-    for (i; i < 32; i++) {
-        printf("%02x", key[i]);
-    }
-    printf("\n");
 
     umask(0);
     return fuse_main(argc, argv, &xmp_oper, NULL);

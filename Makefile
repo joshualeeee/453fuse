@@ -1,8 +1,8 @@
 CC = gcc
-CFLAGS = -Wall -g -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags` -g
+CFLAGS = -Wall -g -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags` 
 LDFLAGS = `pkg-config fuse --libs` -lcrypto
 TARGET = mirror_fs
-SOURCES = mirror_fs.c
+SOURCES = mirror_fs.c aes-crypt.c
 
 
 all: $(TARGET)

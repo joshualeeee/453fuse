@@ -4,6 +4,12 @@
 #define FAILURE 0
 #define SUCCESS 1
 
+// password: user input (null-terminated string)
+// key: output buffer (must be at least 32 bytes)
+void derive_key(const char *password, unsigned char key[32]) {
+    SHA256((const unsigned char *)password, strlen(password), key);
+}
+
 extern int do_crypt(FILE* in, FILE* out, int action, char* key_str){
     /* Local Vars */
 
