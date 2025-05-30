@@ -435,6 +435,7 @@ static struct fuse_operations xmp_oper = {
 };
 
 static char *real_root;
+static char password[256]; // Buffer for the password input
 
 static void fullpath(char fpath[PATH_MAX], const char *path)
 {
@@ -462,6 +463,10 @@ int main(int argc, char *argv[])
 
     // Remove mirror_dir from argv, keep FUSE args and mountpoint intact
     argc--; // drop the mirror_dir argument
+
+    printf("Enter password for decryption: ");
+    fgets(password, sizeof(password), stdin);
+    password[strcspn(password, "\n")] = 0; // Remove newline character
 
     umask(0);
     return fuse_main(argc, argv, &xmp_oper, NULL);

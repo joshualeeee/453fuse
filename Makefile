@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -g -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags`
+CFLAGS = -Wall -g -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags` -g
 LDFLAGS = `pkg-config fuse --libs` -lcrypto
 TARGET = mirror_fs
 SOURCES = mirror_fs.c
