@@ -20,5 +20,4 @@
 */
 extern int do_crypt(FILE* in, FILE* out, int action, char* key_str);
 
-void derive_key(const char *password, unsigned char key[32]);
 #endif

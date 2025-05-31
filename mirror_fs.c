@@ -35,6 +35,7 @@
 
 #include "aes-crypt.h"
 
+static char password[256]; // Buffer for the password input// Global variable to hold the password input
 
 static void fullpath(char fpath[PATH_MAX], const char *path);
 
@@ -317,13 +318,64 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     fullpath(fpath, path);
 
     (void)fi;
-    fd = open(fpath, O_WRONLY);
+    // Open the file for writing or reading
+    fd = open(fpath, O_RDWR);
     if (fd == -1)
         return -errno;
 
-    res = pwrite(fd, buf, size, offset);
-    if (res == -1)
-        res = -errno;
+    // Use fdopen to get a FILE pointer for the file descriptor
+    FILE *fp = fdopen(fd, "r+"); // "r+" for read/write, or "w" for write, etc.
+    // FILE *out = fopen("/tmp/encrypted_file", "w+"); // Temporary file for encrypted output
+    char outpath[PATH_MAX];
+    fullpath(outpath, "/encrypted_file.txt"); // Temporary file for encrypted output
+    printf("Output path: %s\n", outpath);
+    FILE *out = fopen(outpath, "wb");
+
+    if (!fp) {
+        // handle error
+    }
+
+    struct stat st;
+    // Check if the file is empty before writing
+    if (fstat(fd, &st) == 0) {
+        if (st.st_size == 0) {
+            printf("File is empty, writing directly and encrypting\n");
+            // if the file is empty, write the buffer directly then encrypt it
+            res = pwrite(fd, buf, size, offset);
+            if (res == -1)
+                res = -errno;
+
+            // Encrypt the file after writing
+            // Reset the file pointer to the beginning
+            if (lseek(fd, 0, SEEK_SET) == -1) {
+                close(fd);
+                fclose(out);
+                return -errno;
+            }
+
+            // Encrypt to temporary file
+            if (!do_crypt(fp, out, 1, (char *)password)) {
+                close(fd);
+                fclose(out);
+                return -EIO;
+            }
+            fclose(out);
+            close(fd);
+
+            // Overwrite the original file with the encrypted file
+            if (rename(outpath, fpath) == -1) {
+                return -errno;
+            }
+        }
+
+        else{
+            // NEED to implement append
+            
+            res = pwrite(fd, buf, size, offset);
+            if (res == -1)
+                res = -errno;
+        }
+    }
 
     close(fd);
     return res;
@@ -444,7 +496,6 @@ static struct fuse_operations xmp_oper = {
 
 // Global variables
 static char *real_root;
-unsigned char key[32]; // Global buffer for the derived key
 
 
 // // password: user input (null-terminated string)
@@ -481,18 +532,12 @@ int main(int argc, char *argv[])
     argc--; // drop the mirror_dir argument
 
     // Get password input from the user and then derive the key
-    static char password[256]; // Buffer for the password input
+    
     printf("Enter password for decryption: ");
     fgets(password, sizeof(password), stdin);
     password[strcspn(password, "\n")] = 0; // Remove newline character
-    // derive_key(password, key); // Derive the key from the password, store it in the global key buffer
 
-    printf("key derived from password: ");
-    int i = 0;
-    for (i; i < 32; i++) {
-        printf("%02x", key[i]);
-    }
-    printf("\n");
+    printf("password: %s\n", password);
 
     umask(0);
     return fuse_main(argc, argv, &xmp_oper, NULL);
