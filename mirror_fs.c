@@ -40,6 +40,7 @@ static char *real_root;
 static char password[256]; // Buffer for the password input// Global variable to hold the password input
 
 static void fullpath(char fpath[PATH_MAX], const char *path);
+static int create_iv_file(const char *path);
 
 static int xmp_getattr(const char *path, struct stat *stbuf)
 {
@@ -107,6 +108,17 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
+static int create_iv_file(const char *path){
+     // Create the file in the IV directory
+    char iv_file[PATH_MAX];
+    snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
+    int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (iv_fd == -1) {
+        perror("Failed to create IV file");
+        return -errno; // Return error if IV file creation fails
+    }
+    return iv_fd; // Return the file descriptor of the IV file
+}
 // Create a file or a special file (FIFO, device, etc.)a
 // create iv file here instead of in write 
 static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
@@ -130,13 +142,14 @@ static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
         }
     
     // Create the file in the IV directory
-    char iv_file[PATH_MAX];
-    snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
-    int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (iv_fd == -1) {
-        perror("Failed to create IV file");
-        return -errno; // Return error if IV file creation fails
-    }
+    create_iv_file(path);
+    // char iv_file[PATH_MAX];
+    // snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
+    // int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // if (iv_fd == -1) {
+    //     perror("Failed to create IV file");
+    //     return -errno; // Return error if IV file creation fails
+    // }
 
     if (S_ISREG(mode))
     {
@@ -163,6 +176,12 @@ static int xmp_mkdir(const char *path, mode_t mode)
     res = mkdir(fpath, mode);
     if (res == -1)
         return -errno;
+
+        // mirror the directory in the IV directory
+    char iv_dir[PATH_MAX];
+    snprintf(iv_dir, PATH_MAX, "%s/.iv%s", real_root, path);
+    mkdir(iv_dir, 0755);
+    
 
     return 0;
 }
@@ -414,20 +433,18 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 return -errno;
             }
 
-            // Create the IV file
-            char iv_file[PATH_MAX];
-
-            // Create the IV file path
-            snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
-            printf("IV file path: %s\n", iv_file);
-           
-            // Open the IV file for writing, creating it if it doesn't exist
-            int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-            if (iv_fd == -1) {
-                perror("Failed to create IV file");
-                return -errno; // Return error if IV file creation fails
-            }
+            int iv_fd = create_iv_file(path); // Create the IV file after encryption
+            // // Create the IV file
+            // char iv_file[PATH_MAX];
+            // // Create the IV file path
+            // snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
+            // printf("IV file path: %s\n", iv_file);
+            // // Open the IV file for writing, creating it if it doesn't exist
+            // int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            // if (iv_fd == -1) {
+            //     perror("Failed to create IV file");
+            //     return -errno; // Return error if IV file creation fails
+            // }
 
             // Write the IV to the file
             int iv_bytes_written = 0;
