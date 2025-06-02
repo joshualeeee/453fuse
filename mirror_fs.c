@@ -117,6 +117,27 @@ static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 
     /* On Linux this could just be 'mknod(path, mode, rdev)' but this
        is more portable */
+
+    // Create the directory for IV files if it doesn't exist
+    char iv_path[PATH_MAX];
+    snprintf(iv_path, PATH_MAX, "%s/.iv/", real_root); // create .iv directory
+    printf("IV path: %s\n", iv_path);
+            
+    // Create the .iv directory if it doesn't exist
+    if (mkdir(iv_path, 0755) == -1 && errno != EEXIST) {
+        perror("Failed to create .iv directory");
+        return -errno; // Return error if directory creation fails
+        }
+    
+    // Create the file in the IV directory
+    char iv_file[PATH_MAX];
+    snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
+    int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (iv_fd == -1) {
+        perror("Failed to create IV file");
+        return -errno; // Return error if IV file creation fails
+    }
+
     if (S_ISREG(mode))
     {
         res = open(fpath, O_CREAT | O_EXCL | O_WRONLY, mode);
@@ -348,15 +369,15 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         // handle error
     }  
 
-    char iv_path[PATH_MAX];
-    snprintf(iv_path, PATH_MAX, "%s/iv/", real_root); // create .iv directory
-    printf("IV path: %s\n", iv_path);
+    // char iv_path[PATH_MAX];
+    // snprintf(iv_path, PATH_MAX, "%s/iv/", real_root); // create .iv directory
+    // printf("IV path: %s\n", iv_path);
             
-    // Create the .iv directory if it doesn't exist
-    if (mkdir(iv_path, 0755) == -1 && errno != EEXIST) {
-        perror("Failed to create .iv directory");
-        return -errno; // Return error if directory creation fails
-        }
+    // // Create the .iv directory if it doesn't exist
+    // if (mkdir(iv_path, 0755) == -1 && errno != EEXIST) {
+    //     perror("Failed to create .iv directory");
+    //     return -errno; // Return error if directory creation fails
+    //     }
 
     struct stat st;
     // Check if the file is empty before writing
@@ -369,7 +390,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             if (res == -1)
                 res = -errno;
 
-            // Encrypt the file after writing
+            
             // Reset the file pointer to the beginning
             if (lseek(fd, 0, SEEK_SET) == -1) {
                 close(fd);
@@ -377,6 +398,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 return -errno;
             }
 
+            // Encrypt the file after writing
             // Encrypt to temporary file
             if (!do_crypt(fp, out, 1, (char *)password, iv_buffer)) {
                 close(fd);
@@ -396,16 +418,9 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             char iv_file[PATH_MAX];
 
             // Create the IV file path
-            snprintf(iv_file, PATH_MAX, "%s/iv%s.iv", real_root, path);
+            snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
             printf("IV file path: %s\n", iv_file);
            
-            // Debug: Print the IV in hex format
-            // printf("IV used for encryption/decryption: ");
-            // int i =0;
-            // for (i = 0; i < IV_SIZE_BYTES; i++) {
-            //     printf("%02x", iv_buffer[i]);
-            // }
-
             // Open the IV file for writing, creating it if it doesn't exist
             int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
@@ -424,7 +439,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 perror("Failed to write IV to file");
                 return -EIO; // Return error if writing IV fails
             }
-            
+
             close(iv_fd);
 
             printf("File encrypted and IV saved successfully.\n");
