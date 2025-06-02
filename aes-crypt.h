@@ -9,7 +9,7 @@
 #define BLOCKSIZE 1024
 #define FAILURE 0
 #define SUCCESS 1
-#define IV_SIZE_BYTES 16
+#define IV_SIZE_BYTES 32
 /* int do_crypt(FILE* in, FILE* out, int action, char* key_str)
 * Purpose: Perform cipher on in File* and place result in out File*
 * Args: FILE* in : Input File Pointer

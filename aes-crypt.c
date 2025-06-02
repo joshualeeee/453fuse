@@ -3,7 +3,7 @@
 #define BLOCKSIZE 1024
 #define FAILURE 0
 #define SUCCESS 1
-// #define IV_SIZE_BYTES 16
+#define IV_SIZE_BYTES 32
 
 // password: user input (null-terminated string)
 // key: output buffer (must be at least 32 bytes)

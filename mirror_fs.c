@@ -107,6 +107,8 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
+// Create a file or a special file (FIFO, device, etc.)a
+// create iv file here instead of in write 
 static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 {
     int res;
@@ -324,7 +326,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     int fd;
     int res;
     char fpath[PATH_MAX];
-    unsigned char iv_buffer[32]; // Buffer for the IV
+    unsigned char iv_buffer[IV_SIZE_BYTES]; // Buffer for the IV
     fullpath(fpath, path);
     printf("original path: %s\n", path);
     printf("Writing to file: %s\n", fpath);
@@ -361,6 +363,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     if (fstat(fd, &st) == 0) {
         if (st.st_size == 0) {
             printf("File is empty, writing directly and encrypting\n");
+
             // if the file is empty, write the buffer directly then encrypt it
             res = pwrite(fd, buf, size, offset);
             if (res == -1)
@@ -397,14 +400,13 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             printf("IV file path: %s\n", iv_file);
            
             // Debug: Print the IV in hex format
-            printf("IV used for encryption/decryption: ");
-            int i =0;
-            for (i = 0; i < IV_SIZE_BYTES; i++) {
-                printf("%02x", iv_buffer[i]);
-            }
+            // printf("IV used for encryption/decryption: ");
+            // int i =0;
+            // for (i = 0; i < IV_SIZE_BYTES; i++) {
+            //     printf("%02x", iv_buffer[i]);
+            // }
 
-            // Create the IV file
-            // Open the IV file for writing
+            // Open the IV file for writing, creating it if it doesn't exist
             int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
             if (iv_fd == -1) {
@@ -413,12 +415,16 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             }
 
             // Write the IV to the file
-            res = pwrite(iv_fd, iv_buffer, IV_SIZE_BYTES, 0);
-            if (res == -1) {
+            int iv_bytes_written = 0;
+            iv_bytes_written = pwrite(iv_fd, iv_buffer, IV_SIZE_BYTES, 0);
+
+            // Check if writing the IV was successful
+            if (iv_bytes_written == -1) {
                 close(iv_fd);
                 perror("Failed to write IV to file");
                 return -EIO; // Return error if writing IV fails
             }
+            
             close(iv_fd);
 
             printf("File encrypted and IV saved successfully.\n");
