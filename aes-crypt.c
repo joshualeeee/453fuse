@@ -3,10 +3,11 @@
 #define BLOCKSIZE 1024
 #define FAILURE 0
 #define SUCCESS 1
+// #define IV_SIZE_BYTES 16
 
 // password: user input (null-terminated string)
 // key: output buffer (must be at least 32 bytes)
-extern int do_crypt(FILE* in, FILE* out, int action, char* key_str){
+extern int do_crypt(FILE* in, FILE* out, int action, char* key_str, unsigned char* iv_buffer){
     /* Local Vars */
 
     /* Buffers */
@@ -28,6 +29,7 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str){
 
     /* Setup Encryption Key and Cipher Engine if in cipher mode */
     if(action >= 0){
+		printf("setting up cipher engine\n");
 		if(!key_str){
 			/* Error */
 			fprintf(stderr, "Key_str must not be NULL\n");
@@ -42,18 +44,18 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str){
 			return 0;
 		}
 		/* Init Engine */
+		if(!generate_random_iv(iv)){
+			/* Error */
+			fprintf(stderr, "Failed to generate random IV\n");
+			return 0;
+		}
 		EVP_CIPHER_CTX_init(&ctx);
 		EVP_CipherInit_ex(&ctx, EVP_aes_256_cbc(), NULL, key, iv, action);
-    }    
-
-    /* Loop through Input File*/
-    // for(block;block ){
-	// 	/* Read Block */
-	// 	inlen = fread(inbuf, sizeof(*inbuf), BLOCKSIZE, in);
-	// 	if(inlen <= 0){
-	// 		/* EOF -> Break Loop */
-	// 		break;
-	// 	}
+		
+		// Copy the IV to the provided buffer
+		memcpy(iv_buffer, iv, sizeof(iv));
+	}
+	
 	
 	while ((inlen = fread(inbuf, sizeof(*inbuf), BLOCKSIZE, in)) > 0) {
 		printf("Read %d bytes from input file\n", inlen);
@@ -102,4 +104,14 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str){
     
     /* Success */
     return 1;
+}
+
+extern int generate_random_iv(unsigned char *iv) {
+	if (!RAND_bytes(iv, IV_SIZE_BYTES)) {
+		fprintf(stderr, "Failed to generate random IV\n");
+		return FAILURE;
+	}
+
+	/* Success */
+	return SUCCESS;
 }

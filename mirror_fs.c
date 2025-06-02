@@ -35,6 +35,8 @@
 
 #include "aes-crypt.h"
 
+// Global variables
+static char *real_root;
 static char password[256]; // Buffer for the password input// Global variable to hold the password input
 
 static void fullpath(char fpath[PATH_MAX], const char *path);
@@ -308,14 +310,24 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
 // If write is called then the file needs to be decrypeted before writing
 // Then the entire file is encrypted again after writing
+// Removes everything after the first '.' in the filename (modifies in place)
+void remove_after_dot(char *filename) {
+    char *dot = strchr(filename, '.');
+    if (dot) {
+        *dot = '\0';
+    }
+}
+
 static int xmp_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *fi)
 {
-
     int fd;
     int res;
     char fpath[PATH_MAX];
+    unsigned char iv_buffer[32]; // Buffer for the IV
     fullpath(fpath, path);
+    printf("original path: %s\n", path);
+    printf("Writing to file: %s\n", fpath);
 
     (void)fi;
     // Open the file for writing or reading
@@ -325,7 +337,6 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
     // Use fdopen to get a FILE pointer for the file descriptor
     FILE *fp = fdopen(fd, "r+"); // "r+" for read/write, or "w" for write, etc.
-    // FILE *out = fopen("/tmp/encrypted_file", "w+"); // Temporary file for encrypted output
     char outpath[PATH_MAX];
     fullpath(outpath, "/encrypted_file.txt"); // Temporary file for encrypted output
     printf("Output path: %s\n", outpath);
@@ -333,7 +344,17 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
     if (!fp) {
         // handle error
-    }
+    }  
+
+    char iv_path[PATH_MAX];
+    snprintf(iv_path, PATH_MAX, "%s/iv/", real_root); // create .iv directory
+    printf("IV path: %s\n", iv_path);
+            
+    // Create the .iv directory if it doesn't exist
+    if (mkdir(iv_path, 0755) == -1 && errno != EEXIST) {
+        perror("Failed to create .iv directory");
+        return -errno; // Return error if directory creation fails
+        }
 
     struct stat st;
     // Check if the file is empty before writing
@@ -354,11 +375,12 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             }
 
             // Encrypt to temporary file
-            if (!do_crypt(fp, out, 1, (char *)password)) {
+            if (!do_crypt(fp, out, 1, (char *)password, iv_buffer)) {
                 close(fd);
                 fclose(out);
                 return -EIO;
             }
+            printf("Encryption successful, writing to output file\n");
             fclose(out);
             close(fd);
 
@@ -366,6 +388,40 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             if (rename(outpath, fpath) == -1) {
                 return -errno;
             }
+
+            // Create the IV file
+            char iv_file[PATH_MAX];
+
+            // Create the IV file path
+            snprintf(iv_file, PATH_MAX, "%s/iv%s.iv", real_root, path);
+            printf("IV file path: %s\n", iv_file);
+           
+            // Debug: Print the IV in hex format
+            printf("IV used for encryption/decryption: ");
+            int i =0;
+            for (i = 0; i < IV_SIZE_BYTES; i++) {
+                printf("%02x", iv_buffer[i]);
+            }
+
+            // Create the IV file
+            // Open the IV file for writing
+            int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+            if (iv_fd == -1) {
+                perror("Failed to create IV file");
+                return -errno; // Return error if IV file creation fails
+            }
+
+            // Write the IV to the file
+            res = pwrite(iv_fd, iv_buffer, IV_SIZE_BYTES, 0);
+            if (res == -1) {
+                close(iv_fd);
+                perror("Failed to write IV to file");
+                return -EIO; // Return error if writing IV fails
+            }
+            close(iv_fd);
+
+            printf("File encrypted and IV saved successfully.\n");
         }
 
         else{
@@ -494,8 +550,7 @@ static struct fuse_operations xmp_oper = {
 #endif
 };
 
-// Global variables
-static char *real_root;
+
 
 
 // // password: user input (null-terminated string)
