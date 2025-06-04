@@ -27,7 +27,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/time.h>
-//#include "aes_crypt.h" // Include the AES crypt header for encryption/decryption
 
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
@@ -108,7 +107,7 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 
 // Create a file or a special file (FIFO, device, etc.)a
-// create iv file here instead of in write 
+// create iv file here instead of in write
 static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 {
     int res;
@@ -196,6 +195,16 @@ static int xmp_rename(const char *from, const char *to)
 
     res = rename(ffrom, fto);
     if (res == -1)
+        return -errno;
+
+    char ivfrom[PATH_MAX];
+    char ivto[PATH_MAX];
+
+    snprintf(ivfrom, PATH_MAX, "%s/.iv%s.iv", real_root, from);
+    snprintf(ivto, PATH_MAX, "%s/.iv%s.iv", real_root, to);
+
+    // Attempt to rename the IV file; it's okay if it doesn't exist
+    if (rename(ivfrom, ivto) == -1 && errno != ENOENT)
         return -errno;
 
     return 0;
@@ -292,30 +301,93 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+
+    printf("xmp_read called for path: %s\n", path);
+
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
     (void)fi;
-    fd = open(fpath, O_RDONLY);
-    if (fd == -1)
+
+    // Open encrypted file
+    FILE *encrypted_file = fopen(fpath, "rb");
+    if (!encrypted_file)
         return -errno;
 
-    res = pread(fd, buf, size, offset);
-    if (res == -1)
-        res = -errno;
+    char iv_path[PATH_MAX];
+    snprintf(iv_path, PATH_MAX, "%s/.iv%s.iv", real_root, path);
 
-    close(fd);
+    // Open iv file
+    FILE *iv_file = fopen(iv_path, "rb");
+    if (!iv_file)
+    {
+        fclose(encrypted_file);
+        return -errno;
+    }
+
+    // Grab the IV
+    unsigned char iv_buffer[IV_SIZE_BYTES];
+    if (fread(iv_buffer, 1, IV_SIZE_BYTES, iv_file) != IV_SIZE_BYTES)
+    {
+        fclose(encrypted_file);
+        fclose(iv_file);
+        printf("getting iv error\n");
+        return -EIO;
+    }
+    fclose(iv_file);
+
+    // Temporary file to store decrypted output
+    char temp_path[] = "/tmp/tempDecryptedXXXXXX";
+    printf("Decryption output path: %s\n", temp_path);
+
+    // make temp file for decryption
+    int tmp_fd = mkstemp(temp_path);
+    if (tmp_fd == -1)
+    {
+        fclose(encrypted_file);
+        return -errno;
+    }
+    FILE *dec_file = fdopen(tmp_fd, "wb+");
+
+    // Decrypt
+    if (!do_crypt(encrypted_file, dec_file, 0, password, iv_buffer))
+    {
+        fclose(encrypted_file);
+        fclose(dec_file);
+        unlink(temp_path);
+        printf("do_crypt error\n");
+        return -EIO;
+    }
+    fclose(encrypted_file);
+
+    // Read from decrypted file
+    if (fseeko(dec_file, offset, SEEK_SET) != 0)
+    {
+        fclose(dec_file);
+        unlink(temp_path);
+        return -errno;
+    }
+
+    int res = fread(buf, 1, size, dec_file);
+    if (res < 0)
+    {
+        fclose(dec_file);
+        unlink(temp_path);
+        return -errno;
+    }
+
+    fclose(dec_file);
+    unlink(temp_path);
     return res;
 }
 
 // If write is called then the file needs to be decrypeted before writing
 // Then the entire file is encrypted again after writing
 // Removes everything after the first '.' in the filename (modifies in place)
-void remove_after_dot(char *filename) {
+void remove_after_dot(char *filename)
+{
     char *dot = strchr(filename, '.');
-    if (dot) {
+    if (dot)
+    {
         *dot = '\0';
     }
 }
@@ -344,24 +416,28 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     printf("Output path: %s\n", outpath);
     FILE *out = fopen(outpath, "wb");
 
-    if (!fp) {
+    if (!fp)
+    {
         // handle error
-    }  
+    }
 
     char iv_path[PATH_MAX];
-    snprintf(iv_path, PATH_MAX, "%s/iv/", real_root); // create .iv directory
+    snprintf(iv_path, PATH_MAX, "%s/.iv/", real_root); // create .iv directory
     printf("IV path: %s\n", iv_path);
-            
+
     // Create the .iv directory if it doesn't exist
-    if (mkdir(iv_path, 0755) == -1 && errno != EEXIST) {
+    if (mkdir(iv_path, 0755) == -1 && errno != EEXIST)
+    {
         perror("Failed to create .iv directory");
         return -errno; // Return error if directory creation fails
-        }
+    }
 
     struct stat st;
     // Check if the file is empty before writing
-    if (fstat(fd, &st) == 0) {
-        if (st.st_size == 0) {
+    if (fstat(fd, &st) == 0)
+    {
+        if (st.st_size == 0)
+        {
             printf("File is empty, writing directly and encrypting\n");
 
             // if the file is empty, write the buffer directly then encrypt it
@@ -371,14 +447,16 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
             // Encrypt the file after writing
             // Reset the file pointer to the beginning
-            if (lseek(fd, 0, SEEK_SET) == -1) {
+            if (lseek(fd, 0, SEEK_SET) == -1)
+            {
                 close(fd);
                 fclose(out);
                 return -errno;
             }
 
             // Encrypt to temporary file
-            if (!do_crypt(fp, out, 1, (char *)password, iv_buffer)) {
+            if (!do_crypt(fp, out, 1, (char *)password, iv_buffer))
+            {
                 close(fd);
                 fclose(out);
                 return -EIO;
@@ -388,7 +466,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             close(fd);
 
             // Overwrite the original file with the encrypted file
-            if (rename(outpath, fpath) == -1) {
+            if (rename(outpath, fpath) == -1)
+            {
                 return -errno;
             }
 
@@ -396,9 +475,9 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             char iv_file[PATH_MAX];
 
             // Create the IV file path
-            snprintf(iv_file, PATH_MAX, "%s/iv%s.iv", real_root, path);
+            snprintf(iv_file, PATH_MAX, "%s/.iv%s.iv", real_root, path);
             printf("IV file path: %s\n", iv_file);
-           
+
             // Debug: Print the IV in hex format
             // printf("IV used for encryption/decryption: ");
             // int i =0;
@@ -409,7 +488,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             // Open the IV file for writing, creating it if it doesn't exist
             int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-            if (iv_fd == -1) {
+            if (iv_fd == -1)
+            {
                 perror("Failed to create IV file");
                 return -errno; // Return error if IV file creation fails
             }
@@ -419,20 +499,22 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             iv_bytes_written = pwrite(iv_fd, iv_buffer, IV_SIZE_BYTES, 0);
 
             // Check if writing the IV was successful
-            if (iv_bytes_written == -1) {
+            if (iv_bytes_written == -1)
+            {
                 close(iv_fd);
                 perror("Failed to write IV to file");
                 return -EIO; // Return error if writing IV fails
             }
-            
+
             close(iv_fd);
 
             printf("File encrypted and IV saved successfully.\n");
         }
 
-        else{
+        else
+        {
             // NEED to implement append
-            
+
             res = pwrite(fd, buf, size, offset);
             if (res == -1)
                 res = -errno;
@@ -556,9 +638,6 @@ static struct fuse_operations xmp_oper = {
 #endif
 };
 
-
-
-
 // // password: user input (null-terminated string)
 // // key: output buffer (must be at least 32 bytes)
 // void derive_key(const char *password, unsigned char key[32]) {
@@ -593,7 +672,7 @@ int main(int argc, char *argv[])
     argc--; // drop the mirror_dir argument
 
     // Get password input from the user and then derive the key
-    
+
     printf("Enter password for decryption: ");
     fgets(password, sizeof(password), stdin);
     password[strcspn(password, "\n")] = 0; // Remove newline character
