@@ -17,6 +17,7 @@
 * char* key_str : C-string containing passphrase from which key is derived
 * Return: FAILURE on error, SUCCESS on success
 */
-extern int do_crypt(FILE* in, FILE* out, int action, char* key_str);
+extern int do_crypt(FILE *in, FILE *out, int action, char *key_str);
+extern int generate_random_iv(unsigned char *iv);
 #endif
 Annotations
