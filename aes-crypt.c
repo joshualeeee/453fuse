@@ -3,7 +3,6 @@
 #define BLOCKSIZE 1024
 #define FAILURE 0
 #define SUCCESS 1
-#define IV_SIZE_BYTES 32
 
 // password: user input (null-terminated string)
 // key: output buffer (must be at least 32 bytes)
@@ -21,7 +20,6 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str, unsigned cha
     /* OpenSSL libcrypto vars */
     EVP_CIPHER_CTX ctx;
     unsigned char key[32];
-    unsigned char iv[32];
     int nrounds = 5;
     
     /* tmp vars */
@@ -37,23 +35,15 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str, unsigned cha
 		}
 		/* Build Key from String */
 		i = EVP_BytesToKey(EVP_aes_256_cbc(), EVP_sha1(), NULL,
-				(unsigned char*)key_str, strlen(key_str), nrounds, key, iv);
+				(unsigned char*)key_str, strlen(key_str), nrounds, key, NULL);
 		if (i != 32) {
 			/* Error */
 			fprintf(stderr, "Key size is %d bits - should be 256 bits\n", i*8);
 			return 0;
 		}
 		/* Init Engine */
-		if(!generate_random_iv(iv)){
-			/* Error */
-			fprintf(stderr, "Failed to generate random IV\n");
-			return 0;
-		}
 		EVP_CIPHER_CTX_init(&ctx);
-		EVP_CipherInit_ex(&ctx, EVP_aes_256_cbc(), NULL, key, iv, action);
-		
-		// Copy the IV to the provided buffer
-		memcpy(iv_buffer, iv, sizeof(iv));
+		EVP_CipherInit_ex(&ctx, EVP_aes_256_cbc(), NULL, key, iv_buffer, action);
 	}
 	
 	
