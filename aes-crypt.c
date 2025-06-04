@@ -42,37 +42,46 @@ extern int do_crypt(FILE *in, FILE *out, int action, char *key_str, unsigned cha
 	int i;
 
 	/* Setup Encryption Key and Cipher Engine if in cipher mode */
-	if (action >= 0)
+	if (!key_str)
 	{
-		printf("setting up cipher engine\n");
-		if (!key_str)
-		{
-			/* Error */
-			fprintf(stderr, "Key_str must not be NULL\n");
-			return 0;
-		}
-		/* Build Key from String */
-		i = EVP_BytesToKey(EVP_aes_256_cbc(), EVP_sha1(), NULL,
-						   (unsigned char *)key_str, strlen(key_str), nrounds, key, iv);
-		if (i != 32)
-		{
-			/* Error */
-			fprintf(stderr, "Key size is %d bits - should be 256 bits\n", i * 8);
-			return 0;
-		}
-		/* Init Engine */
+		fprintf(stderr, "Key_str must not be NULL\n");
+		return 0;
+	}
+
+	/* Derive key from password */
+	i = EVP_BytesToKey(EVP_aes_256_cbc(), EVP_sha1(), NULL,
+					   (unsigned char *)key_str, strlen(key_str), nrounds, key, iv);
+
+	if (i != 32)
+	{
+		fprintf(stderr, "Key size is %d bits - should be 256 bits\n", i * 8);
+		return 0;
+	}
+
+	// encryption generate random iv
+	if (action == 1)
+	{
 		if (!generate_random_iv(iv))
 		{
-			/* Error */
 			fprintf(stderr, "Failed to generate random IV\n");
 			return 0;
 		}
-		EVP_CIPHER_CTX_init(&ctx);
-		EVP_CipherInit_ex(&ctx, EVP_aes_256_cbc(), NULL, key, iv, action);
-
-		// Copy the IV to the provided buffer
-		memcpy(iv_buffer, iv, sizeof(iv));
+		memcpy(iv_buffer, iv, IV_SIZE_BYTES); // store the IV for writing to .iv file
 	}
+	// decryption use existing IV
+	else if (action == 0)
+	{
+		memcpy(iv, iv_buffer, IV_SIZE_BYTES);
+	}
+	else
+	{
+		fprintf(stderr, "Invalid action mode: %d\n", action);
+		return 0;
+	}
+
+	/* Initialize cipher context */
+	EVP_CIPHER_CTX_init(&ctx);
+	EVP_CipherInit_ex(&ctx, EVP_aes_256_cbc(), NULL, key, iv, action);
 
 	while ((inlen = fread(inbuf, sizeof(*inbuf), BLOCKSIZE, in)) > 0)
 	{
