@@ -27,7 +27,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/time.h>
-//#include "aes_crypt.h" // Include the AES crypt header for encryption/decryption
 
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
@@ -42,7 +41,8 @@ static char password[256]; // Buffer for the password input// Global variable to
 // Create a full path by pre-pending real_root to the path
 static void fullpath(char fpath[PATH_MAX], const char *path);
 
-// Get the path to an IV file given the path to the original file in the file system
+/* Get the path to an IV file given the path to the original file
+ * Stores the result in the provided iv_path buffer */
 static void get_iv_path(char iv_path[PATH_MAX], const char *path);
 
 // Create a corresponding file in the IV directory and puts an IV in it
@@ -190,7 +190,7 @@ static int create_iv_file(const char *path){
 }
 
 // Create a file or a special file (FIFO, device, etc.)a
-// create iv file here instead of in write 
+// create iv file here instead of in write
 static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 {
     int res;
@@ -233,10 +233,10 @@ static int xmp_mkdir(const char *path, mode_t mode)
     if (res == -1)
         return -errno;
 
-        // mirror the directory in the IV directory
+    // mirror the directory in the IV directory
     char iv_dir[PATH_MAX];
-    snprintf(iv_dir, PATH_MAX, "%s/.iv%s", real_root, path);
-    mkdir(iv_dir, 0755);
+    get_iv_path(iv_dir, path);
+    mkdir(iv_dir, 0755);    // 0755 = rwxr-xr-x
     
 
     return 0;
@@ -292,6 +292,16 @@ static int xmp_rename(const char *from, const char *to)
 
     res = rename(ffrom, fto);
     if (res == -1)
+        return -errno;
+
+    char ivfrom[PATH_MAX];
+    char ivto[PATH_MAX];
+
+    get_iv_path(ivfrom, from);
+    get_iv_path(ivto, to);
+
+    // Attempt to rename the IV file; it's okay if it doesn't exist
+    if (rename(ivfrom, ivto) == -1 && errno != ENOENT)
         return -errno;
 
     return 0;
@@ -388,30 +398,119 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+    printf("xmp_read called for path: %s\n", path);
+
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
     (void)fi;
-    fd = open(fpath, O_RDONLY);
-    if (fd == -1)
+
+    // Open encrypted file
+    FILE *encrypted_file = fopen(fpath, "rb");
+    if (!encrypted_file)
         return -errno;
 
-    res = pread(fd, buf, size, offset);
-    if (res == -1)
-        res = -errno;
+    printf("successfully opened encrypted file!\n");
+    char iv_path[PATH_MAX];
+    unsigned char iv_buffer[IV_SIZE_BYTES];
+    FILE *iv_file;
+    printf("before get_iv_path()\n");
+    get_iv_path(iv_path, path);
 
-    close(fd);
+    printf("after get_iv_path()\n");
+    printf("iv_path: %s\n",iv_path);
+    // Check if IV file exists
+    if (access(iv_path, F_OK) == 0) {
+        // IV file exists: Open file and read IV into buffer
+        printf("IV file exists: reading IV file\n");
+        iv_file = fopen(iv_path, "rb");
+
+        if (!iv_file) {
+            fclose(encrypted_file);
+            return -errno;
+        }
+
+        if (fread(iv_buffer, 1, IV_SIZE_BYTES, iv_file) != IV_SIZE_BYTES)
+        {
+            fclose(encrypted_file);
+            fclose(iv_file);
+            printf("getting iv error\n");
+            return -EIO;
+        }
+        fclose(iv_file);
+        printf("Successfully read IV file\n");
+    } else {
+        // IV file does not exist: read file without decrypting
+        printf("IV file does not exist: reading file without decryption\n");
+        if (fseeko(encrypted_file, offset, SEEK_SET) != 0)
+        {
+            fclose(encrypted_file);
+            return -errno;
+        }
+
+        int res = fread(buf, 1, size, encrypted_file);
+        if (res != size && ferror(encrypted_file)) {
+            int err = errno;
+            fclose(encrypted_file);
+            return -err;
+        }
+
+        return res;
+    }
+    
+    // Temporary file to store decrypted output
+    char temp_path[] = "/tmp/tempDecryptedXXXXXX";
+    printf("Decryption output path: %s\n", temp_path);
+
+    // make temp file for decryption
+    int tmp_fd = mkstemp(temp_path);
+    if (tmp_fd == -1)
+    {
+        fclose(encrypted_file);
+        return -errno;
+    }
+    FILE *dec_file = fdopen(tmp_fd, "wb+");
+
+    // Decrypt
+    if (!do_crypt(encrypted_file, dec_file, 0, password, iv_buffer))
+    {
+        fclose(encrypted_file);
+        fclose(dec_file);
+        unlink(temp_path);
+        fprintf(stderr, "do_crypt error\n");
+        return -EIO;
+    }
+    fclose(encrypted_file);
+
+    // Read from decrypted file
+    if (fseeko(dec_file, offset, SEEK_SET) != 0)
+    {
+        fclose(dec_file);
+        unlink(temp_path);
+        return -errno;
+    }
+
+    int res = fread(buf, 1, size, dec_file);
+    if (res != size && ferror(dec_file))
+    {
+        int err = errno;
+        fclose(dec_file);
+        unlink(temp_path);
+        return -err;
+    }
+
+    fclose(dec_file);
+    unlink(temp_path);
     return res;
 }
 
-// If write is called then the file needs to be decrypeted before writing
+// If write is called then the file needs to be decrypted before writing
 // Then the entire file is encrypted again after writing
 // Removes everything after the first '.' in the filename (modifies in place)
-void remove_after_dot(char *filename) {
+void remove_after_dot(char *filename)
+{
     char *dot = strchr(filename, '.');
-    if (dot) {
+    if (dot)
+    {
         *dot = '\0';
     }
 }
@@ -443,7 +542,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     printf("Output path: %s\n", outpath);
     FILE *out = fopen(outpath, "wb");
 
-    if (!fp) {
+    if (!fp)
+    {
         // handle error
     }
 
@@ -679,5 +779,7 @@ int main(int argc, char *argv[])
     printf("password: %s\n", password);
 
     umask(0);
-    return fuse_main(argc, argv, &xmp_oper, NULL);
+    int fuse_res = fuse_main(argc, argv, &xmp_oper, NULL);
+    free(real_root);    // realpath() allocates memory for real_root, so should free it
+    return fuse_res;
 }
