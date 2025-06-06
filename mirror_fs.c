@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/limits.h> // for PATH_MAX
+#include <limits.h> // for PATH_MAX
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>

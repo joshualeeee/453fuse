@@ -4,7 +4,6 @@
 #define BLOCKSIZE 1024
 #define FAILURE 0
 #define SUCCESS 1
-#define IV_SIZE_BYTES 32
 
 extern int generate_random_iv(unsigned char *iv)
 {
