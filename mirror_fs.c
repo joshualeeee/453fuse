@@ -299,7 +299,6 @@ static int xmp_rename(const char *from, const char *to)
 
     get_iv_path(ivfrom, from);
     get_iv_path(ivto, to);
-    
 
     // Attempt to rename the IV file; it's okay if it doesn't exist
     if (rename(ivfrom, ivto) == -1 && errno != ENOENT)

@@ -29,4 +29,5 @@ extern int do_crypt(FILE* in, FILE* out, int action, char* key_str, unsigned cha
 * Return: FAILURE on error, SUCCESS on success
 */
 extern int generate_random_iv(unsigned char *iv);
+
 #endif
