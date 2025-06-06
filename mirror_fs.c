@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/limits.h> // for PATH_MAX
+#include <limits.h> // for PATH_MAX
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -679,7 +679,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 return -errno;
             }
 
-            if (!do_crypt(fp, dec_file, 0, (char *)password, iv_buffer))
+            int decrypt_action = action == 1 ? 0 : -1;
+            if (!do_crypt(fp, dec_file, decrypt_action, (char *)password, iv_buffer))
             {
                 fprintf(stderr, "do_crypt failed (decrypt in append)\n");
                 fclose(fp);
@@ -720,7 +721,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
             rewind(fp);
 
-            if (!do_crypt(dec_file, fp, 1, (char *)password, iv_buffer))
+            if (!do_crypt(dec_file, fp, action, (char *)password, iv_buffer))
             {
                 fprintf(stderr, "do_crypt failed (re-encrypt)\n");
                 fclose(fp);
@@ -734,6 +735,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             printf("File successfully appended and re-encrypted\n");
             res = size;
         }
+    } else {
+        res = -errno;
     }
 
     return res;
