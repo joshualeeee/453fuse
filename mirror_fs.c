@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h> // for PATH_MAX
+#include <linux/limits.h> // for PATH_MAX
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -471,13 +471,14 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
         return -errno;
     }
     FILE *dec_file = fdopen(tmp_fd, "wb+");
+    // good practice to unlink immediately after creating temp file (since it's open, won't be deleted yet)
+    unlink(temp_path);
 
     // Decrypt
     if (!do_crypt(encrypted_file, dec_file, 0, password, iv_buffer))
     {
         fclose(encrypted_file);
         fclose(dec_file);
-        unlink(temp_path);
         fprintf(stderr, "do_crypt error\n");
         return -EIO;
     }
@@ -487,7 +488,6 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     if (fseeko(dec_file, offset, SEEK_SET) != 0)
     {
         fclose(dec_file);
-        unlink(temp_path);
         return -errno;
     }
 
@@ -496,12 +496,10 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     {
         int err = errno;
         fclose(dec_file);
-        unlink(temp_path);
         return -err;
     }
 
     fclose(dec_file);
-    unlink(temp_path);
     return res;
 }
 
@@ -527,6 +525,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     char fpath[PATH_MAX];
     char iv_path[PATH_MAX];
     unsigned char iv_buffer[IV_SIZE_BYTES]; // Buffer for the IV
+    FILE *tmp_file;
     fullpath(fpath, path);
     printf("original path: %s\n", path);
     printf("Writing to file: %s\n", fpath);
@@ -539,15 +538,25 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
     // Use fdopen to get a FILE pointer for the file descriptor
     FILE *fp = fdopen(fd, "r+"); // "r+" for read/write, or "w" for write, etc.
-    char outpath[PATH_MAX];
-    fullpath(outpath, "/encrypted_file.txt"); // Temporary file for encrypted output
-    printf("Output path: %s\n", outpath);
-    FILE *out = fopen(outpath, "wb");
-
-    if (!fp)
-    {
-        // handle error
+    if (!fp) {
+        perror("fdopen");
+        close(fd);
+        return -errno;
     }
+
+    // Temporary file to store encrypted output
+    char temp_path[] = "/tmp/tempEncryptedXXXXXX";
+    printf("Encryption output path: %s\n", temp_path);
+
+    // make temp file for encryption
+    int tmp_fd = mkstemp(temp_path);
+    if (tmp_fd == -1)
+    {
+        fclose(fp);
+        return -errno;
+    }
+    // good practice to unlink temp files; since it's open now, it won't be deleted yet
+    unlink(temp_path);
 
     // Check if a IV file exists for this file (if so, this file should be encrypted)
     get_iv_path(iv_path, path);
@@ -559,11 +568,16 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         // Open IV file and read IV into buffer
         if (iv_fd == -1) {
             perror("open");
+            fclose(fp);
+            close(tmp_fd);
             return -errno;
         }
 
         if (read(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1) {
             perror("read");
+            close(iv_fd);
+            fclose(fp);
+            close(tmp_fd);
             return -errno;
         }
 
@@ -581,35 +595,36 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         {
             printf("File is empty, writing directly and encrypting\n");
 
-            // if the file is empty, write the buffer directly then encrypt it
-            res = pwrite(fd, buf, size, offset);
+            // if the file is empty, write the buffer directly to temporary file
+            res = pwrite(tmp_fd, buf, size, offset);
             if (res == -1)
                 res = -errno;
             
             // Reset the file pointer to the beginning
-            if (lseek(fd, 0, SEEK_SET) == -1)
+            if (lseek(tmp_fd, 0, SEEK_SET) == -1)
             {
-                close(fd);
-                fclose(out);
+                fclose(fp);
+                close(tmp_fd);
                 return -errno;
             }
 
-            // Encrypt the file after writing
-            // Encrypt to temporary file
-            if (!do_crypt(fp, out, action, (char *)password, iv_buffer)) {
-                close(fd);
-                fclose(out);
+            tmp_file = fdopen(tmp_fd, "wb+");
+            if (!tmp_file) {
+                perror("fdopen");
+                close(tmp_fd);
+                fclose(fp);
+                return -errno;
+            }
+
+            // Encrypt from temporary file to actual file
+            if (!do_crypt(tmp_file, fp, action, (char *)password, iv_buffer)) {
+                fclose(fp);
+                fclose(tmp_file);
                 return -EIO;
             }
             printf("Encryption successful, writing to output file\n");
-            fclose(out);
-            close(fd);
-
-            // Overwrite the original file with the encrypted file
-            if (rename(outpath, fpath) == -1)
-            {
-                return -errno;
-            }
+            fclose(fp);
+            fclose(tmp_file);
 
             printf("File encrypted and saved successfully.\n");
         }
@@ -617,6 +632,9 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         else
         {
             // NEED to implement append
+            // below 3 lines are temporary
+            fclose(fp);
+            close(tmp_fd);
 
             res = pwrite(fd, buf, size, offset);
             if (res == -1)
@@ -624,7 +642,6 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         }
     }
 
-    close(fd);
     return res;
 }
 
