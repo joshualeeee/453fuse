@@ -351,15 +351,133 @@ static int xmp_chown(const char *path, uid_t uid, gid_t gid)
 
 static int xmp_truncate(const char *path, off_t size)
 {
+    // Open the encrypted file
+    // Decrypt the file to a temporary file
+    // Remove the padding
+    // Truncate the temporary file to the specified size
+    // Encrypt the temporary file back to the original file
+
     int res;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
 
-    res = truncate(fpath, size);
-    if (res == -1)
+    // Open encrypted file
+    FILE *encrypted_file = fopen(fpath, "rb");
+    if (!encrypted_file)
         return -errno;
+    printf("successfully opened encrypted file!\n");
 
-    return 0;
+    // Iv initialization
+    char iv_path[PATH_MAX];
+    unsigned char iv_buffer[IV_SIZE_BYTES];
+    FILE *iv_file;
+
+    // Get the path to the IV file
+    get_iv_path(iv_path, path);
+    printf("iv_path: %s\n",iv_path);
+
+    // Check if IV file exists
+    if (access(iv_path, F_OK) == 0) {
+        // IV file exists: Open file and read IV into buffer
+        printf("IV file exists: reading IV file\n");
+        iv_file = fopen(iv_path, "rb");
+
+        if (!iv_file) {
+            fclose(encrypted_file);
+            return -errno;
+        }
+
+        if (fread(iv_buffer, 1, IV_SIZE_BYTES, iv_file) != IV_SIZE_BYTES)
+        {
+            fclose(encrypted_file);
+            fclose(iv_file);
+            fprintf(stderr, "Error when getting iv!\n");
+            return -EIO;
+        }
+        fclose(iv_file);
+        printf("Successfully read IV file\n");
+    } else {
+        // IV file does not exist: TRUNCATE without decrypting
+        printf("IV file does not exist: truncating file without decryption\n");
+        // Truncate the encrypted file directly
+        res = truncate(fpath, size);
+        if (res == -1)
+        {
+            fclose(encrypted_file);
+            return -errno;
+        }
+        fclose(encrypted_file);
+        return res;
+    }
+
+    // Temporary file to store decrypted output
+    char temp_path[] = "/tmp/tempDecryptedXXXXXX";
+    printf("Decryption output path: %s\n", temp_path);
+
+    // make temp file for decryption
+    int tmp_fd = mkstemp(temp_path);
+    if (tmp_fd == -1)
+    {
+        fclose(encrypted_file);
+        return -errno;
+    }
+    FILE *dec_file = fdopen(tmp_fd, "wb+");
+    // good practice to unlink immediately after creating temp file (since it's open, won't be deleted yet)
+    unlink(temp_path);
+
+    // Decrypt
+    if (!do_crypt(encrypted_file, dec_file, 0, password, iv_buffer))
+    {
+        fclose(encrypted_file);
+        fclose(dec_file);
+        fprintf(stderr, "do_crypt error\n");
+        return -EIO;
+    }
+    fclose(encrypted_file);
+
+    // Truncate the decrypted file to the specified size
+    res = truncate(temp_path, size);
+    if (res == -1)
+    {
+        fclose(dec_file);
+        return -errno;
+    }
+    printf("Successfully truncated decrypted file to size: %zu\n", size);
+    
+    // Encrypt the temporary file back to the original file
+    // Open the temporary decrypted file
+    FILE *temp_decrypted_file = fopen(temp_path, "rb");
+    if (!temp_decrypted_file)
+    {
+        fclose(dec_file);
+        return -errno;
+    }
+    printf("successfully opened temporary decrypted file!\n");
+
+    // Open the original encrypted file for writing
+    // fclose(encrypted_file); // Close the original encrypted file before re-opening it for writing
+    encrypted_file = fopen(fpath, "wb");
+    if (!encrypted_file)
+    {
+        fclose(temp_decrypted_file);
+        return -errno;
+    }
+    printf("successfully opened original encrypted file for writing!\n");
+    // Encrypt the temporary decrypted file back to the original encrypted file
+    if (!do_crypt(temp_decrypted_file, encrypted_file, 1, password, iv_buffer))
+    {
+        fclose(temp_decrypted_file);
+        fclose(encrypted_file);
+        fclose(dec_file);
+        fprintf(stderr, "do_crypt error during re-encryption\n");
+        return -EIO;
+    }
+    fclose(encrypted_file);
+    fclose(temp_decrypted_file);
+    fclose(dec_file);
+    printf("Successfully re-encrypted the file after truncation.\n");
+    
+    return res;
 }
 
 static int xmp_utimens(const char *path, const struct timespec ts[2])
