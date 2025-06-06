@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/limits.h> // for PATH_MAX
+#include <limits.h> // for PATH_MAX
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -363,134 +363,141 @@ static int xmp_chown(const char *path, uid_t uid, gid_t gid)
 
 static int xmp_truncate(const char *path, off_t size)
 {
-    // Open the encrypted file
-    // Decrypt the file to a temporary file
-    // Remove the padding
-    // Truncate the temporary file to the specified size
-    // Encrypt the temporary file back to the original file
-
+    int fd;
     int res;
+    int action;
+    int iv_fd;
     char fpath[PATH_MAX];
-    fullpath(fpath, path);
-
-    // Open encrypted file
-    FILE *encrypted_file = fopen(fpath, "rb");
-    if (!encrypted_file)
-        return -errno;
-    printf("successfully opened encrypted file!\n");
-
-    // Iv initialization
     char iv_path[PATH_MAX];
-    unsigned char iv_buffer[IV_SIZE_BYTES];
-    FILE *iv_file;
+    unsigned char iv_buffer[IV_SIZE_BYTES]; // Buffer for the IV
+    FILE *tmp_file;
+    fullpath(fpath, path);
+    printf("original path: %s\n", path);
+    printf("Writing to file: %s\n", fpath);
 
-    // Get the path to the IV file
+    // Open the file for writing or reading
+    fd = open(fpath, O_RDWR);
+    if (fd == -1)
+        return -errno;
+
+    // Use fdopen to get a FILE pointer for the file descriptor
+    FILE *fp = fdopen(fd, "r+"); // "r+" for read/write, or "w" for write, etc.
+    if (!fp)
+    {
+        perror("fdopen");
+        close(fd);
+        return -errno;
+    }
+
+    // Check if a IV file exists for this file (if so, this file should be encrypted)
     get_iv_path(iv_path, path);
-    printf("iv_path: %s\n",iv_path);
+    if (access(iv_path, F_OK) == 0)
+    {
+        // IV file exists
+        action = 1; // encrypt
+        iv_fd = open(iv_path, O_RDONLY);
 
-    // Check if IV file exists
-    if (access(iv_path, F_OK) == 0) {
-        // IV file exists: Open file and read IV into buffer
-        printf("IV file exists: reading IV file\n");
-        iv_file = fopen(iv_path, "rb");
-
-        if (!iv_file) {
-            fclose(encrypted_file);
+        // Open IV file and read IV into buffer
+        if (iv_fd == -1)
+        {
+            perror("open");
+            fclose(fp);
             return -errno;
         }
 
-        if (fread(iv_buffer, 1, IV_SIZE_BYTES, iv_file) != IV_SIZE_BYTES)
+        if (read(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1)
         {
-            fclose(encrypted_file);
-            fclose(iv_file);
-            fprintf(stderr, "Error when getting iv!\n");
-            return -EIO;
-        }
-        fclose(iv_file);
-        printf("Successfully read IV file\n");
-    } else {
-        // IV file does not exist: TRUNCATE without decrypting
-        printf("IV file does not exist: truncating file without decryption\n");
-        // Truncate the encrypted file directly
-        res = truncate(fpath, size);
-        if (res == -1)
-        {
-            fclose(encrypted_file);
+            perror("read");
+            close(iv_fd);
+            fclose(fp);
             return -errno;
         }
-        fclose(encrypted_file);
-        return res;
+
+        close(iv_fd);
+    }
+    else
+    {
+        // IV file does not exist
+        action = -1; // pass-through
     }
 
-    // Temporary file to store decrypted output
-    char temp_path[] = "/tmp/tempDecryptedXXXXXX";
-    printf("Decryption output path: %s\n", temp_path);
 
-    // make temp file for decryption
-    int tmp_fd = mkstemp(temp_path);
-    if (tmp_fd == -1)
-    {
-        fclose(encrypted_file);
-        return -errno;
-    }
-    FILE *dec_file = fdopen(tmp_fd, "wb+");
-    // good practice to unlink immediately after creating temp file (since it's open, won't be deleted yet)
-    unlink(temp_path);
+            // Decrypt existing encrypted file into memory
+            char temp_dec_path[] = "/tmp/tempDecryptedXXXXXX";
+            int dec_fd = mkstemp(temp_dec_path);
+            if (dec_fd == -1)
+            {
+                perror("mkstemp");
+                fclose(fp);
+                return -errno;
+            }
+            unlink(temp_dec_path); // ensure file is deleted after close
 
-    // Decrypt
-    if (!do_crypt(encrypted_file, dec_file, 0, password, iv_buffer))
-    {
-        fclose(encrypted_file);
-        fclose(dec_file);
-        fprintf(stderr, "do_crypt error\n");
-        return -EIO;
-    }
-    fclose(encrypted_file);
+            FILE *dec_file = fdopen(dec_fd, "wb+");
+            if (!dec_file)
+            {
+                perror("fdopen dec_file");
+                close(dec_fd);
+                fclose(fp);
+                return -errno;
+            }
 
-    // Truncate the decrypted file to the specified size
-    res = truncate(temp_path, size);
-    if (res == -1)
-    {
-        fclose(dec_file);
-        return -errno;
-    }
-    printf("Successfully truncated decrypted file to size: %zu\n", size);
-    
-    // Encrypt the temporary file back to the original file
-    // Open the temporary decrypted file
-    FILE *temp_decrypted_file = fopen(temp_path, "rb");
-    if (!temp_decrypted_file)
-    {
-        fclose(dec_file);
-        return -errno;
-    }
-    printf("successfully opened temporary decrypted file!\n");
+            int decrypt_action = action == 1 ? 0 : -1;
+            if (!do_crypt(fp, dec_file, decrypt_action, (char *)password, iv_buffer))
+            {
+                fprintf(stderr, "do_crypt failed (decrypt in append)\n");
+                fclose(fp);
+                fclose(dec_file);
+                return -EIO;
+            }
 
-    // Open the original encrypted file for writing
-    // fclose(encrypted_file); // Close the original encrypted file before re-opening it for writing
-    encrypted_file = fopen(fpath, "wb");
-    if (!encrypted_file)
-    {
-        fclose(temp_decrypted_file);
-        return -errno;
-    }
-    printf("successfully opened original encrypted file for writing!\n");
-    // Encrypt the temporary decrypted file back to the original encrypted file
-    if (!do_crypt(temp_decrypted_file, encrypted_file, 1, password, iv_buffer))
-    {
-        fclose(temp_decrypted_file);
-        fclose(encrypted_file);
-        fclose(dec_file);
-        fprintf(stderr, "do_crypt error during re-encryption\n");
-        return -EIO;
-    }
-    fclose(encrypted_file);
-    fclose(temp_decrypted_file);
-    fclose(dec_file);
-    printf("Successfully re-encrypted the file after truncation.\n");
-    
-    return res;
+            // truncate the file to the new size
+            fflush(dec_file);
+            if (ftruncate(fileno(dec_file), size) != 0)
+            {
+                int err = errno;
+                perror("ftruncate");
+                fclose(fp);
+                fclose(dec_file);
+                return -err;
+            }
+            struct stat st;
+            fstat(fileno(dec_file), &st);
+            printf("After ftruncate, dec_file size: %ld\n", st.st_size);
+
+            // Step 3: Re-encrypt updated content
+            fflush(dec_file);
+            rewind(dec_file);
+
+            if (ftruncate(fd, 0) != 0)
+            {
+                int err = errno;
+                perror("ftruncate");
+                fclose(fp);
+                fclose(dec_file);
+                return -err;
+            }
+
+            rewind(fp);
+
+            if (!do_crypt(dec_file, fp, action, (char *)password, iv_buffer))
+            {
+                fprintf(stderr, "do_crypt failed (re-encrypt)\n");
+                fclose(fp);
+                fclose(dec_file);
+                return -EIO;
+            }
+            fflush(fp);
+            fflush(dec_file);
+            fclose(fp);
+            fclose(dec_file);
+
+            printf("File successfully appended and re-encrypted\n");
+            res = size;
+
+    return 0;
 }
+
 
 static int xmp_utimens(const char *path, const struct timespec ts[2])
 {
@@ -797,7 +804,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
                 return -errno;
             }
 
-            if (!do_crypt(fp, dec_file, 0, (char *)password, iv_buffer))
+            int decrypt_action = action == 1 ? 0 : -1;
+            if (!do_crypt(fp, dec_file, decrypt_action, (char *)password, iv_buffer))
             {
                 fprintf(stderr, "do_crypt failed (decrypt in append)\n");
                 fclose(fp);
@@ -838,7 +846,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
             rewind(fp);
 
-            if (!do_crypt(dec_file, fp, 1, (char *)password, iv_buffer))
+            if (!do_crypt(dec_file, fp, action, (char *)password, iv_buffer))
             {
                 fprintf(stderr, "do_crypt failed (re-encrypt)\n");
                 fclose(fp);
@@ -852,6 +860,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             printf("File successfully appended and re-encrypted\n");
             res = size;
         }
+    } else {
+        res = -errno;
     }
 
     return res;
