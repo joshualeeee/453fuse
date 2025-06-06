@@ -656,6 +656,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
         else
         {
+            // append
+
             // Decrypt existing encrypted file into memory
             char temp_dec_path[] = "/tmp/tempDecryptedXXXXXX";
             int dec_fd = mkstemp(temp_dec_path);
