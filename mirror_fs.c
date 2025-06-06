@@ -114,11 +114,13 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
-static void get_iv_path(char iv_path[PATH_MAX], const char *path) {
+static void get_iv_path(char iv_path[PATH_MAX], const char *path)
+{
     snprintf(iv_path, PATH_MAX, "%s/.iv%s", real_root, path);
 }
 
-static int create_iv_file(const char *path){
+static int create_iv_file(const char *path)
+{
     // Create the file in the IV directory
     char iv_file[PATH_MAX];
     unsigned char iv_buffer[IV_SIZE_BYTES];
@@ -129,23 +131,27 @@ static int create_iv_file(const char *path){
      * original directory to mirror that existed prior to mounting won't have corresponding
      * entries in the ./iv dir and so need to be created on demand when an IV file is created
      * in one of those pre-existing directories
-    */
+     */
     char *iv_dir_substring = iv_file + strlen(real_root);
     printf("iv_dir_loc_in_path: %s\n", iv_dir_substring);
-    
+
     // continue until you reach the null byte (end of string)
     char *start = iv_dir_substring;
     char *end = start;
-    while (*end) {
-        while (*end && *end != '/') {
+    while (*end)
+    {
+        while (*end && *end != '/')
+        {
             end++;
         }
 
-        if (*end) {
-            *end = '\0';    // makes it so that iv_file contains directory ending at *end
+        if (*end)
+        {
+            *end = '\0'; // makes it so that iv_file contains directory ending at *end
 
             // 0755 = rwxr-xr-x
-            if (mkdir(iv_file, 0755) == -1 && errno != EEXIST) {
+            if (mkdir(iv_file, 0755) == -1 && errno != EEXIST)
+            {
                 perror("mkdir");
                 return -errno;
             }
@@ -155,7 +161,9 @@ static int create_iv_file(const char *path){
             *end = '/'; // restore character value
             start = end + 1;
             end = start;
-        } else {
+        }
+        else
+        {
             // reached end of string before we reached a /, so break
             break;
         }
@@ -163,24 +171,28 @@ static int create_iv_file(const char *path){
 
     // create file in .iv dir
     int iv_fd = open(iv_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (iv_fd == -1) {
+    if (iv_fd == -1)
+    {
         perror("Failed to create IV file");
         return -errno; // Return error if IV file creation fails
     }
 
     // generate the random IV
-    if (!generate_random_iv(iv_buffer)) {
+    if (!generate_random_iv(iv_buffer))
+    {
         return -EIO; // Generic error code return
     }
 
     // write the random IV to the file
-    if (write(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1) {
+    if (write(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1)
+    {
         perror("write");
         return -errno;
     }
 
     // Close the file
-    if (close(iv_fd) == -1) {
+    if (close(iv_fd) == -1)
+    {
         perror("close");
         return -errno;
     }
@@ -199,10 +211,11 @@ static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 
     /* On Linux this could just be 'mknod(path, mode, rdev)' but this
        is more portable */
-    
+
     // Create the file in the IV directory
     int iv_res = create_iv_file(path);
-    if (iv_res) {
+    if (iv_res)
+    {
         fprintf(stderr, "Failed to create an IV file in the /.iv directory!\n");
         return iv_res;
     }
@@ -236,8 +249,7 @@ static int xmp_mkdir(const char *path, mode_t mode)
     // mirror the directory in the IV directory
     char iv_dir[PATH_MAX];
     get_iv_path(iv_dir, path);
-    mkdir(iv_dir, 0755);    // 0755 = rwxr-xr-x
-    
+    mkdir(iv_dir, 0755);   // 0755 = rwxr-xr-x
 
     return 0;
 }
@@ -534,15 +546,17 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     // Get the path to the IV file
     get_iv_path(iv_path, path);
-    printf("iv_path: %s\n",iv_path);
+    printf("iv_path: %s\n", iv_path);
 
     // Check if IV file exists
-    if (access(iv_path, F_OK) == 0) {
+    if (access(iv_path, F_OK) == 0)
+    {
         // IV file exists: Open file and read IV into buffer
         printf("IV file exists: reading IV file\n");
         iv_file = fopen(iv_path, "rb");
 
-        if (!iv_file) {
+        if (!iv_file)
+        {
             fclose(encrypted_file);
             return -errno;
         }
@@ -556,7 +570,9 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
         }
         fclose(iv_file);
         printf("Successfully read IV file\n");
-    } else {
+    }
+    else
+    {
         // IV file does not exist: read file without decrypting
         printf("IV file does not exist: reading file without decryption\n");
         if (fseeko(encrypted_file, offset, SEEK_SET) != 0)
@@ -567,7 +583,8 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
         // Read file into buffer (no decryption)
         int res = fread(buf, 1, size, encrypted_file);
-        if (res != size && ferror(encrypted_file)) {
+        if (res != size && ferror(encrypted_file))
+        {
             int err = errno;
             fclose(encrypted_file);
             return -err;
@@ -656,7 +673,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
     // Use fdopen to get a FILE pointer for the file descriptor
     FILE *fp = fdopen(fd, "r+"); // "r+" for read/write, or "w" for write, etc.
-    if (!fp) {
+    if (!fp)
+    {
         perror("fdopen");
         close(fd);
         return -errno;
@@ -678,20 +696,23 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
     // Check if a IV file exists for this file (if so, this file should be encrypted)
     get_iv_path(iv_path, path);
-    if (access(iv_path, F_OK) == 0) {
+    if (access(iv_path, F_OK) == 0)
+    {
         // IV file exists
         action = 1; // encrypt
         iv_fd = open(iv_path, O_RDONLY);
 
         // Open IV file and read IV into buffer
-        if (iv_fd == -1) {
+        if (iv_fd == -1)
+        {
             perror("open");
             fclose(fp);
             close(tmp_fd);
             return -errno;
         }
 
-        if (read(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1) {
+        if (read(iv_fd, iv_buffer, IV_SIZE_BYTES) == -1)
+        {
             perror("read");
             close(iv_fd);
             fclose(fp);
@@ -700,9 +721,11 @@ static int xmp_write(const char *path, const char *buf, size_t size,
         }
 
         close(iv_fd);
-    } else {
+    }
+    else
+    {
         // IV file does not exist
-        action = -1;    // pass-through
+        action = -1; // pass-through
     }
 
     struct stat st;
@@ -717,7 +740,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             res = pwrite(tmp_fd, buf, size, offset);
             if (res == -1)
                 res = -errno;
-            
+
             // Reset the file pointer to the beginning
             if (lseek(tmp_fd, 0, SEEK_SET) == -1)
             {
@@ -727,7 +750,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             }
 
             tmp_file = fdopen(tmp_fd, "wb+");
-            if (!tmp_file) {
+            if (!tmp_file)
+            {
                 perror("fdopen");
                 close(tmp_fd);
                 fclose(fp);
@@ -735,7 +759,8 @@ static int xmp_write(const char *path, const char *buf, size_t size,
             }
 
             // Encrypt from temporary file to actual file
-            if (!do_crypt(tmp_file, fp, action, (char *)password, iv_buffer)) {
+            if (!do_crypt(tmp_file, fp, action, (char *)password, iv_buffer))
+            {
                 fclose(fp);
                 fclose(tmp_file);
                 return -EIO;
@@ -749,14 +774,83 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
         else
         {
-            // NEED to implement append
-            // below 3 lines are temporary
-            fclose(fp);
-            close(tmp_fd);
+            // append
 
-            res = pwrite(fd, buf, size, offset);
-            if (res == -1)
-                res = -errno;
+            // Decrypt existing encrypted file into memory
+            char temp_dec_path[] = "/tmp/tempDecryptedXXXXXX";
+            int dec_fd = mkstemp(temp_dec_path);
+            if (dec_fd == -1)
+            {
+                perror("mkstemp");
+                fclose(fp);
+                close(tmp_fd);
+                return -errno;
+            }
+            unlink(temp_dec_path); // ensure file is deleted after close
+
+            FILE *dec_file = fdopen(dec_fd, "wb+");
+            if (!dec_file)
+            {
+                perror("fdopen dec_file");
+                close(dec_fd);
+                fclose(fp);
+                return -errno;
+            }
+
+            if (!do_crypt(fp, dec_file, 0, (char *)password, iv_buffer))
+            {
+                fprintf(stderr, "do_crypt failed (decrypt in append)\n");
+                fclose(fp);
+                fclose(dec_file);
+                return -EIO;
+            }
+
+            // Append new content
+            if (fseeko(dec_file, offset, SEEK_SET) != 0)
+            {
+                int err = errno;
+                perror("fseeko (append)");
+                fclose(fp);
+                fclose(dec_file);
+                return -err;
+            }
+
+            if (fwrite(buf, 1, size, dec_file) != size)
+            {
+                int err = errno;
+                perror("fwrite (append)");
+                fclose(fp);
+                fclose(dec_file);
+                return -err;
+            }
+
+            // Step 3: Re-encrypt updated content
+            rewind(dec_file);
+
+            if (ftruncate(fd, 0) != 0)
+            {
+                int err = errno;
+                perror("ftruncate");
+                fclose(fp);
+                fclose(dec_file);
+                return -err;
+            }
+
+            rewind(fp);
+
+            if (!do_crypt(dec_file, fp, 1, (char *)password, iv_buffer))
+            {
+                fprintf(stderr, "do_crypt failed (re-encrypt)\n");
+                fclose(fp);
+                fclose(dec_file);
+                return -EIO;
+            }
+
+            fclose(fp);
+            fclose(dec_file);
+
+            printf("File successfully appended and re-encrypted\n");
+            res = size;
         }
     }
 
@@ -919,6 +1013,6 @@ int main(int argc, char *argv[])
 
     umask(0);
     int fuse_res = fuse_main(argc, argv, &xmp_oper, NULL);
-    free(real_root);    // realpath() allocates memory for real_root, so should free it
+    free(real_root); // realpath() allocates memory for real_root, so should free it
     return fuse_res;
 }
