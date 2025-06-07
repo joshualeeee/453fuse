@@ -389,6 +389,18 @@ static int xmp_truncate(const char *path, off_t size)
         return -errno;
     }
 
+    // if file is empty, return 0
+    struct stat st;
+    printf("Checking if file is empty...\n");
+    if (fstat(fd, &st) == 0) {
+        if (st.st_size == 0) {
+            fclose(fp);
+            return 0;
+        }
+    }
+
+
+
     // Check if a IV file exists for this file (if so, this file should be encrypted)
     get_iv_path(iv_path, path);
     if (access(iv_path, F_OK) == 0)
@@ -461,7 +473,7 @@ static int xmp_truncate(const char *path, off_t size)
                 fclose(dec_file);
                 return -err;
             }
-            struct stat st;
+            
             fstat(fileno(dec_file), &st);
             printf("After ftruncate, dec_file size: %ld\n", st.st_size);
 
@@ -536,12 +548,13 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
     printf("xmp_read called for path: %s\n", path);
-
+    int fd;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
     (void)fi;
 
     // Open encrypted file
+    fd = open(fpath, O_RDONLY);
     FILE *encrypted_file = fopen(fpath, "rb");
     if (!encrypted_file)
         return -errno;
@@ -554,6 +567,17 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     // Get the path to the IV file
     get_iv_path(iv_path, path);
     printf("iv_path: %s\n", iv_path);
+
+    // Check if the file is empty
+    // if file is empty, return 0
+    struct stat st;
+    printf("Checking if file is empty...\n");
+    if (fstat(fd, &st) == 0) {
+        if (st.st_size == 0) {
+            fclose(encrypted_file);
+            return 0;
+        }
+    }
 
     // Check if IV file exists
     if (access(iv_path, F_OK) == 0)
