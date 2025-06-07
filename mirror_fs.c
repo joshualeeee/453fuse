@@ -364,9 +364,21 @@ static int xmp_link(const char *from, const char *to)
     fullpath(ffrom, from);
     fullpath(fto, to);
 
+    printf("Linking %s to %s\n", ffrom, fto);
     res = link(ffrom, fto);
     if (res == -1)
         return -errno;
+
+    // if the hard link was created successfully, we want to create a hard link in the IV dir
+    char ivfrom[PATH_MAX];
+    char ivto[PATH_MAX];
+    get_iv_path(ivfrom, from);
+    get_iv_path(ivto, to);
+
+    printf("Linking %s to %s\n", ivfrom, ivto);
+    // attempt to link, but this could fail if the file existed before mounting and there is no IV file
+    // if this fails because of no IV file, that's fine, so ignore the error
+    link(ivfrom, ivto);
 
     return 0;
 }
