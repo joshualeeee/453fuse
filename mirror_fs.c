@@ -45,6 +45,9 @@ static void fullpath(char fpath[PATH_MAX], const char *path);
  * Stores the result in the provided iv_path buffer */
 static void get_iv_path(char iv_path[PATH_MAX], const char *path);
 
+// Create pre-requisite directories given a path (returns -errno on error, 0 on success)
+static int create_prereq_dirs(const char *path);
+
 // Create a corresponding file in the IV directory and puts an IV in it
 static int create_iv_file(const char *path);
 
@@ -114,6 +117,53 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
+// Create pre-requisite directories given a path (returns -errno on error, 0 on success)
+static int create_prereq_dirs(const char *path) {
+    char path_copy[PATH_MAX];
+    strncpy(path_copy, path, PATH_MAX);
+    char *dirs_past_mountpoint = path_copy + strlen(real_root);
+    printf("starting directories: %s\n", dirs_past_mountpoint);
+
+    // continue until you reach the null byte (end of string)
+    char *start = dirs_past_mountpoint;
+    char *end = start;
+    while (*end)
+    {
+        while (*end && *end != '/')
+        {
+            end++;
+        }
+
+        if (*end)
+        {
+            *end = '\0'; // makes it so that iv_file contains directory ending at *end
+
+            printf("Attempting to create directory at: %s\n", path_copy);
+
+            // 0755 = rwxr-xr-x
+            if (mkdir(path_copy, 0755) == -1 && errno != EEXIST)
+            {
+                perror("mkdir");
+                *end = '/';
+                return -errno;
+            }
+
+            printf("Ensured directory exists or created directory at: %s\n", path_copy);
+
+            *end = '/'; // restore character value
+            start = end + 1;
+            end = start;
+        }
+        else
+        {
+            // reached end of string before we reached a /, so break
+            break;
+        }
+    }
+
+    return 0;   // success
+}
+
 static void get_iv_path(char iv_path[PATH_MAX], const char *path)
 {
     snprintf(iv_path, PATH_MAX, "%s/.iv%s", real_root, path);
@@ -132,41 +182,9 @@ static int create_iv_file(const char *path)
      * entries in the ./iv dir and so need to be created on demand when an IV file is created
      * in one of those pre-existing directories
      */
-    char *iv_dir_substring = iv_file + strlen(real_root);
-    printf("iv_dir_loc_in_path: %s\n", iv_dir_substring);
-
-    // continue until you reach the null byte (end of string)
-    char *start = iv_dir_substring;
-    char *end = start;
-    while (*end)
-    {
-        while (*end && *end != '/')
-        {
-            end++;
-        }
-
-        if (*end)
-        {
-            *end = '\0'; // makes it so that iv_file contains directory ending at *end
-
-            // 0755 = rwxr-xr-x
-            if (mkdir(iv_file, 0755) == -1 && errno != EEXIST)
-            {
-                perror("mkdir");
-                return -errno;
-            }
-
-            printf("Ensured directory exists or created directory at: %s\n", iv_file);
-
-            *end = '/'; // restore character value
-            start = end + 1;
-            end = start;
-        }
-        else
-        {
-            // reached end of string before we reached a /, so break
-            break;
-        }
+    int prereq_dirs_res = create_prereq_dirs(iv_file);
+    if (prereq_dirs_res < 0) {
+        return prereq_dirs_res;
     }
 
     // create file in .iv dir
@@ -249,7 +267,13 @@ static int xmp_mkdir(const char *path, mode_t mode)
     // mirror the directory in the IV directory
     char iv_dir[PATH_MAX];
     get_iv_path(iv_dir, path);
-    mkdir(iv_dir, 0755);   // 0755 = rwxr-xr-x
+    // no error checking for this line since creating just dirs in the IV isn't critical
+    create_prereq_dirs(path);
+    // 0755 = rwxr-xr-x
+    if (mkdir(iv_dir, 0755) == -1) {
+        // don't return -errno here since creating just a dir isn't critical
+        perror("mkdir for IV");
+    }
 
     return 0;
 }
@@ -258,11 +282,16 @@ static int xmp_unlink(const char *path)
 {
     int res;
     char fpath[PATH_MAX];
+    char ivpath[PATH_MAX];
     fullpath(fpath, path);
 
     res = unlink(fpath);
     if (res == -1)
         return -errno;
+
+    // try deleting the IV file (if the IV file doesn't exist, we don't care)
+    get_iv_path(ivpath, path);
+    unlink(ivpath);
 
     return 0;
 }
@@ -271,11 +300,18 @@ static int xmp_rmdir(const char *path)
 {
     int res;
     char fpath[PATH_MAX];
+    char ivpath[PATH_MAX];
     fullpath(fpath, path);
 
     res = rmdir(fpath);
     if (res == -1)
         return -errno;
+
+    // try deleting the corresponding directory in the IV directory
+    get_iv_path(ivpath, fpath);
+    if (rmdir(ivpath) == -1) {
+        perror("rmdir for IV"); // for logging, but we don't want to fail on an IV-related error
+    }
 
     return 0;
 }
@@ -370,7 +406,6 @@ static int xmp_truncate(const char *path, off_t size)
     char fpath[PATH_MAX];
     char iv_path[PATH_MAX];
     unsigned char iv_buffer[IV_SIZE_BYTES]; // Buffer for the IV
-    FILE *tmp_file;
     fullpath(fpath, path);
     printf("original path: %s\n", path);
     printf("Writing to file: %s\n", fpath);
@@ -627,7 +662,6 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     // Temporary file to store decrypted output
     char temp_path[] = "/tmp/tempDecryptedXXXXXX";
-    printf("Decryption output path: %s\n", temp_path);
 
     // make temp file for decryption
     int tmp_fd = mkstemp(temp_path);
@@ -637,6 +671,7 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
         return -errno;
     }
     FILE *dec_file = fdopen(tmp_fd, "wb+");
+    printf("Decryption output path: %s\n", temp_path);
     // good practice to unlink immediately after creating temp file (since it's open, won't be deleted yet)
     unlink(temp_path);
 
